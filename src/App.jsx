@@ -1811,22 +1811,6 @@ export default function Acervo() {
             ))}
           </div>
 
-          <button
-            onClick={exportarCatalogoExcel}
-            disabled={catalogoGestaoFiltrado.length === 0}
-            style={{
-              background: ACCENT,
-              color: "#fff",
-              fontFamily: MONO,
-              fontSize: 13,
-              opacity: catalogoGestaoFiltrado.length === 0 ? 0.4 : 1,
-            }}
-            className="rounded-sm px-4 py-2.5 mt-4 flex items-center justify-center gap-2 hover:opacity-90 transition w-full sm:w-auto"
-          >
-            <Download size={16} />
-            Exportar planilha de resultados
-          </button>
-
           {/* Filtros — só fazem sentido no catálogo */}
           {gestaoAba === "catalogo" && (
             <>
@@ -1891,6 +1875,23 @@ export default function Acervo() {
         </header>
 
         <main className="px-5 pb-16 max-w-5xl mx-auto">
+          {gestaoAba === "catalogo" && (
+            <button
+              onClick={exportarCatalogoExcel}
+              disabled={catalogoGestaoFiltrado.length === 0}
+              style={{
+                background: ACCENT,
+                color: "#fff",
+                fontFamily: MONO,
+                fontSize: 13,
+                opacity: catalogoGestaoFiltrado.length === 0 ? 0.4 : 1,
+              }}
+              className="rounded-sm px-4 py-2.5 mb-4 flex items-center justify-center gap-2 hover:opacity-90 transition w-full sm:w-auto"
+            >
+              <Download size={16} />
+              Exportar planilha do catálogo
+            </button>
+          )}
           {gestaoAba === "catalogo" && scanMensagem && (
             <div
               style={{
@@ -1978,6 +1979,21 @@ export default function Acervo() {
 
           {gestaoAba === "cadastrar" && (
             <div className="max-w-md">
+              <button
+                onClick={exportarCatalogoExcel}
+                disabled={catalogoGestaoFiltrado.length === 0}
+                style={{
+                  background: ACCENT,
+                  color: "#fff",
+                  fontFamily: MONO,
+                  fontSize: 13,
+                  opacity: catalogoGestaoFiltrado.length === 0 ? 0.4 : 1,
+                }}
+                className="rounded-sm px-4 py-2.5 mb-4 flex items-center justify-center gap-2 hover:opacity-90 transition w-full"
+              >
+                <Download size={16} />
+                Exportar planilha do catálogo
+              </button>
               <div className="flex flex-col gap-3">
                 <input
                   placeholder="Título *"
@@ -2051,6 +2067,21 @@ export default function Acervo() {
 
           {gestaoAba === "importar" && (
             <div className="max-w-md">
+              <button
+                onClick={exportarCatalogoExcel}
+                disabled={catalogoGestaoFiltrado.length === 0}
+                style={{
+                  background: ACCENT,
+                  color: "#fff",
+                  fontFamily: MONO,
+                  fontSize: 13,
+                  opacity: catalogoGestaoFiltrado.length === 0 ? 0.4 : 1,
+                }}
+                className="rounded-sm px-4 py-2.5 mb-4 flex items-center justify-center gap-2 hover:opacity-90 transition w-full"
+              >
+                <Download size={16} />
+                Exportar planilha do catálogo
+              </button>
               <div style={{ background: CARD, borderColor: RULE }} className="border rounded-sm p-4">
                 <p style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600 }} className="mb-2">
                   Como formatar sua planilha
