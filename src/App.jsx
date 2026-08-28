@@ -424,10 +424,15 @@ export default function Acervo() {
 
   const iniciarSessao = async (dadosAuth) => {
     currentAccessToken = dadosAuth.access_token;
-    setSessao({ accessToken: dadosAuth.access_token, refreshToken: dadosAuth.refresh_token, userId: dadosAuth.user.id });
-    await window.storage.set(SESSAO_KEY, JSON.stringify({ refreshToken: dadosAuth.refresh_token }));
-    await carregarPerfilDaSessao(dadosAuth.user.id);
-    await carregarCatalogo();
+    try {
+      await carregarPerfilDaSessao(dadosAuth.user.id);
+      await carregarCatalogo();
+      setSessao({ accessToken: dadosAuth.access_token, refreshToken: dadosAuth.refresh_token, userId: dadosAuth.user.id });
+      await window.storage.set(SESSAO_KEY, JSON.stringify({ refreshToken: dadosAuth.refresh_token }));
+    } catch (err) {
+      currentAccessToken = null;
+      throw err;
+    }
   };
 
   const encerrarSessao = async () => {
@@ -468,13 +473,15 @@ export default function Acervo() {
         const salvo = await window.storage.get(SESSAO_KEY);
         const { refreshToken } = JSON.parse(salvo.value);
         const dadosAuth = await authRefresh(refreshToken);
-        currentAccessToken = dadosAuth.access_token;
-        setSessao({ accessToken: dadosAuth.access_token, refreshToken: dadosAuth.refresh_token, userId: dadosAuth.user.id });
-        await window.storage.set(SESSAO_KEY, JSON.stringify({ refreshToken: dadosAuth.refresh_token }));
-        await carregarPerfilDaSessao(dadosAuth.user.id);
-        await carregarCatalogo();
+        await iniciarSessao(dadosAuth);
       } catch {
-        // sem sessão salva (ou expirada) — mostra a tela de login normalmente
+        // sem sessão salva (ou expirada/inválida) — mostra a tela de login normalmente
+        currentAccessToken = null;
+        try {
+          await window.storage.delete(SESSAO_KEY);
+        } catch {
+          // não tinha sessão salva mesmo, tudo bem
+        }
       } finally {
         setAutenticando(false);
       }
