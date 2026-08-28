@@ -503,7 +503,7 @@ export default function Acervo() {
       setSbErro(null);
     } catch (err) {
       console.error(err);
-      setSbErro("Não foi possível salvar no banco compartilhado. Verifique sua internet e tente de novo.");
+      setSbErro(err?.message || "Não foi possível salvar no banco compartilhado. Verifique sua internet e tente de novo.");
     } finally {
       setSaving(false);
     }
