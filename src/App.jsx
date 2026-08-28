@@ -139,7 +139,7 @@ async function authAlterarMinhaSenha(novaSenha) {
 // Chama a Edge Function admin-usuarios (roda no servidor, com privilégios de
 // admin) — usada pra criar pessoa, redefinir senha de outros e excluir pessoa.
 async function chamarAdminUsuarios(acao, dados) {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-usuarios`, {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/dynamic-service`, {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({ acao, ...dados }),
