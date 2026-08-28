@@ -33,32 +33,157 @@ function estoqueBaixo(livro) {
   return livro.quantidade > 0 && livro.quantidade <= LIMITE_ESTOQUE_BAIXO;
 }
 
-const STORAGE_KEY = "acervo:livros";
-const MOV_KEY = "acervo:movimentacoes";
-const USUARIOS_KEY = "acervo:usuarios";
-const PERFIL_KEY = "acervo:perfil";
-const CATEGORIAS_KEY = "acervo:categorias";
+
+// ---------------------------------------------------------------------------
+// Supabase — banco compartilhado entre todos os usuários do app. Usamos a
+// API REST direto via fetch (sem SDK), pra funcionar tanto no artifact de
+// preview quanto no site publicado sem depender de um pacote npm extra.
+// A chave "anon" é pública por design — a segurança real vem das policies
+// de RLS configuradas nas tabelas.
+// ---------------------------------------------------------------------------
+const SUPABASE_URL = "https://viixukbodizfgzkiagim.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpaXh1a2JvZGl6Zmd6a2lhZ2ltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4NzczNjAsImV4cCI6MjEwMzQ1MzM2MH0.qHx4Fkvayc4TcKFit4en-8eh2PYsXLj27itValKeEDQ";
+
+// Token de acesso da sessão atual — atualizado no login/logout/refresh.
+// As funções sb* abaixo sempre leem o valor mais recente na hora da chamada.
+let currentAccessToken = null;
+
+function authHeaders() {
+  return {
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${currentAccessToken || SUPABASE_ANON_KEY}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function sbSelect(tabela, filtro = "") {
+  const url = `${SUPABASE_URL}/rest/v1/${tabela}?select=*${filtro ? `&${filtro}` : ""}`;
+  const res = await fetch(url, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`Falha ao buscar "${tabela}" (${res.status})`);
+  return res.json();
+}
+
+async function sbInsert(tabela, linhaOuLinhas) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${tabela}`, {
+    method: "POST",
+    headers: { ...authHeaders(), Prefer: "return=representation" },
+    body: JSON.stringify(linhaOuLinhas),
+  });
+  if (!res.ok) throw new Error(`Falha ao inserir em "${tabela}" (${res.status})`);
+  return res.json();
+}
+
+async function sbUpsert(tabela, linhas) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${tabela}?on_conflict=id`, {
+    method: "POST",
+    headers: { ...authHeaders(), Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(linhas),
+  });
+  if (!res.ok) throw new Error(`Falha ao sincronizar "${tabela}" (${res.status})`);
+  return res.json();
+}
+
+async function sbUpdate(tabela, id, campos) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${tabela}?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), Prefer: "return=representation" },
+    body: JSON.stringify(campos),
+  });
+  if (!res.ok) throw new Error(`Falha ao atualizar "${tabela}" (${res.status})`);
+  return res.json();
+}
+
+async function sbDelete(tabela, id) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${tabela}?id=eq.${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Falha ao excluir de "${tabela}" (${res.status})`);
+}
+
+// ---- autenticação (Supabase Auth via REST, sem SDK) ----
+async function authLogin(email, senha) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password: senha }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.msg || "E-mail ou senha incorretos.");
+  return data; // { access_token, refresh_token, expires_in, user }
+}
+
+async function authRefresh(refreshToken) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error("Sessão expirada.");
+  return data;
+}
+
+async function authAlterarMinhaSenha(novaSenha) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    method: "PUT",
+    headers: authHeaders(),
+    body: JSON.stringify({ password: novaSenha }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.msg || "Não foi possível trocar a senha.");
+  return data;
+}
+
+// Chama a Edge Function admin-usuarios (roda no servidor, com privilégios de
+// admin) — usada pra criar pessoa, redefinir senha de outros e excluir pessoa.
+async function chamarAdminUsuarios(acao, dados) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-usuarios`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ acao, ...dados }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Falha ao executar a operação.");
+  return data;
+}
+
+// Conversões entre o formato usado no app (camelCase) e as colunas do banco
+// (snake_case) — só necessário pra movimentações, o resto já bate 1:1.
+function movParaLinha(mov) {
+  return {
+    id: mov.id,
+    livro_id: mov.livroId,
+    tipo: mov.tipo,
+    data: mov.data,
+    detalhe: mov.detalhe || null,
+    comprador_nome: mov.compradorNome || null,
+    comprador_telefone: mov.compradorTelefone || null,
+    vendedor_nome: mov.vendedorNome || null,
+    quantidade_vendida: mov.quantidadeVendida || null,
+    desconto: mov.desconto || null,
+    valor_total: mov.valorTotal != null ? mov.valorTotal : null,
+  };
+}
+
+function linhaParaMov(row) {
+  return {
+    id: row.id,
+    livroId: row.livro_id,
+    tipo: row.tipo,
+    data: row.data,
+    detalhe: row.detalhe,
+    compradorNome: row.comprador_nome,
+    compradorTelefone: row.comprador_telefone,
+    vendedorNome: row.vendedor_nome,
+    quantidadeVendida: row.quantidade_vendida,
+    desconto: row.desconto,
+    valorTotal: row.valor_total,
+  };
+}
 
 const PAPEIS = ["Liderado", "Líder"];
-
-const ADMIN_PADRAO = {
-  id: "us_admin_verbo",
-  nome: "Verbo da Vida Montes Claros",
-  email: "montesclarostodosossantos@verbodavida.com",
-  telefone: "(38) 98407-6634",
-  papel: "Líder",
-};
-
-const USUARIOS_PADRAO = [
-  ADMIN_PADRAO,
-  {
-    id: "us_jaqueline_moraes",
-    nome: "Jaqueline Moraes",
-    email: "jack.designerinter@gmail.com",
-    telefone: "(38) 8844-5115",
-    papel: "Liderado",
-  },
-];
 
 function maskTelefone(valor) {
   const digitos = valor.replace(/\D/g, "").slice(0, 11);
@@ -165,6 +290,7 @@ export default function Acervo() {
   const [visualizacao, setVisualizacao] = useState("fichas"); // fichas | estante
   const [spineSelecionado, setSpineSelecionado] = useState(null); // livroId
   const [saving, setSaving] = useState(false);
+  const [sbErro, setSbErro] = useState(null);
   const loadedOnce = useRef(false);
 
   // Venda
@@ -193,12 +319,20 @@ export default function Acervo() {
   const [novaCategoria, setNovaCategoria] = useState("");
   const [confirmExcluirCategoria, setConfirmExcluirCategoria] = useState(null);
   const [confirmExcluirUsuario, setConfirmExcluirUsuario] = useState(null);
-  const [novoUsuario, setNovoUsuario] = useState({ nome: "", email: "", telefone: "", papel: "Liderado" });
+  const [novoUsuario, setNovoUsuario] = useState({ nome: "", email: "", telefone: "", papel: "Liderado", senha: "" });
 
-  // Perfil
+  // Autenticação (Supabase Auth) — o "perfil" agora vem da pessoa logada de verdade
+  const [sessao, setSessao] = useState(null); // { accessToken, refreshToken, userId }
+  const [autenticando, setAutenticando] = useState(true); // true enquanto tenta restaurar sessão salva
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginSenha, setLoginSenha] = useState("");
+  const [loginErro, setLoginErro] = useState("");
+  const [loginCarregando, setLoginCarregando] = useState(false);
   const [perfil, setPerfil] = useState(null);
-  const [perfilForm, setPerfilForm] = useState({ nome: "", email: "", telefone: "", papel: "Liderado" });
-  const [perfilSalvo, setPerfilSalvo] = useState(false);
+  const [novaSenhaPropria, setNovaSenhaPropria] = useState("");
+  const [senhaAlterada, setSenhaAlterada] = useState(false);
+  const [redefinirSenhaId, setRedefinirSenhaId] = useState(null); // usuarioId sendo redefinido pelo Líder
+  const [redefinirSenhaValor, setRedefinirSenhaValor] = useState("");
 
   // Reposição rápida (a partir da ficha)
   const [repoModal, setRepoModal] = useState(null);
@@ -230,67 +364,122 @@ export default function Acervo() {
   const [torchDisponivel, setTorchDisponivel] = useState(false);
   const [torchLigado, setTorchLigado] = useState(false);
 
-  // ---- carregar dados persistidos ----
+  const SESSAO_KEY = "acervo:sessao"; // guarda só o refresh_token, localmente por aparelho
+
+  const carregarCatalogo = async () => {
+    try {
+      let linhasLivros = await sbSelect("livros");
+      if (linhasLivros.length === 0) {
+        linhasLivros = await sbInsert("livros", SEED_BOOKS);
+      }
+      setLivros(linhasLivros);
+    } catch (err) {
+      console.error("Falha ao carregar livros do Supabase:", err);
+      setSbErro("Não foi possível conectar ao banco de dados. Verifique sua internet e recarregue a página.");
+      setLivros(SEED_BOOKS);
+    }
+
+    try {
+      const linhasMovs = await sbSelect("movimentacoes");
+      setMovs(linhasMovs.map(linhaParaMov).sort((a, b) => new Date(b.data) - new Date(a.data)));
+    } catch (err) {
+      console.error("Falha ao carregar movimentações do Supabase:", err);
+      setMovs([]);
+    }
+
+    try {
+      let linhasUsuarios = await sbSelect("usuarios");
+      setUsuarios(linhasUsuarios);
+    } catch (err) {
+      console.error("Falha ao carregar equipe do Supabase:", err);
+      setUsuarios([]);
+    }
+
+    try {
+      let linhasCategorias = await sbSelect("categorias");
+      if (linhasCategorias.length === 0) {
+        linhasCategorias = await sbInsert(
+          "categorias",
+          CATEGORIAS_PADRAO.map((nome) => ({ id: nome, nome }))
+        );
+      }
+      setCategoriasCadastradas(linhasCategorias.map((l) => l.nome));
+    } catch (err) {
+      console.error("Falha ao carregar categorias do Supabase:", err);
+      setCategoriasCadastradas(CATEGORIAS_PADRAO);
+    }
+
+    loadedOnce.current = true;
+  };
+
+  // Depois de logar (ou restaurar sessão), busca a ficha da pessoa na equipe
+  // pelo auth_id — é isso que vira o "perfil" (nome, papel, etc).
+  const carregarPerfilDaSessao = async (userId) => {
+    const linhas = await sbSelect("usuarios", `auth_id=eq.${userId}`);
+    if (linhas.length === 0) {
+      throw new Error("Sua conta não está vinculada a nenhuma pessoa da equipe. Fale com o Líder.");
+    }
+    setPerfil(linhas[0]);
+  };
+
+  const iniciarSessao = async (dadosAuth) => {
+    currentAccessToken = dadosAuth.access_token;
+    setSessao({ accessToken: dadosAuth.access_token, refreshToken: dadosAuth.refresh_token, userId: dadosAuth.user.id });
+    await window.storage.set(SESSAO_KEY, JSON.stringify({ refreshToken: dadosAuth.refresh_token }));
+    await carregarPerfilDaSessao(dadosAuth.user.id);
+    await carregarCatalogo();
+  };
+
+  const encerrarSessao = async () => {
+    currentAccessToken = null;
+    setSessao(null);
+    setPerfil(null);
+    setLivros(null);
+    setMovs(null);
+    setUsuarios(null);
+    setCategoriasCadastradas(null);
+    loadedOnce.current = false;
+    try {
+      await window.storage.delete(SESSAO_KEY);
+    } catch {
+      // sem sessão salva, tudo bem
+    }
+  };
+
+  const fazerLogin = async () => {
+    if (!loginEmail.trim() || !loginSenha) return;
+    setLoginCarregando(true);
+    setLoginErro("");
+    try {
+      const dadosAuth = await authLogin(loginEmail.trim(), loginSenha);
+      await iniciarSessao(dadosAuth);
+      setLoginSenha("");
+    } catch (err) {
+      setLoginErro(err.message || "Não foi possível entrar. Confira e-mail e senha.");
+    } finally {
+      setLoginCarregando(false);
+    }
+  };
+
+  // ---- restaurar sessão salva neste aparelho, ao abrir o app ----
   useEffect(() => {
     (async () => {
       try {
-        const b = await window.storage.get(STORAGE_KEY);
-        setLivros(b ? JSON.parse(b.value) : SEED_BOOKS);
+        const salvo = await window.storage.get(SESSAO_KEY);
+        const { refreshToken } = JSON.parse(salvo.value);
+        const dadosAuth = await authRefresh(refreshToken);
+        currentAccessToken = dadosAuth.access_token;
+        setSessao({ accessToken: dadosAuth.access_token, refreshToken: dadosAuth.refresh_token, userId: dadosAuth.user.id });
+        await window.storage.set(SESSAO_KEY, JSON.stringify({ refreshToken: dadosAuth.refresh_token }));
+        await carregarPerfilDaSessao(dadosAuth.user.id);
+        await carregarCatalogo();
       } catch {
-        setLivros(SEED_BOOKS);
+        // sem sessão salva (ou expirada) — mostra a tela de login normalmente
+      } finally {
+        setAutenticando(false);
       }
-      try {
-        const m = await window.storage.get(MOV_KEY);
-        setMovs(m ? JSON.parse(m.value) : []);
-      } catch {
-        setMovs([]);
-      }
-      try {
-        const u = await window.storage.get(USUARIOS_KEY);
-        setUsuarios(u ? JSON.parse(u.value) : USUARIOS_PADRAO);
-      } catch {
-        setUsuarios(USUARIOS_PADRAO);
-      }
-      try {
-        const p = await window.storage.get(PERFIL_KEY);
-        const dados = p ? JSON.parse(p.value) : ADMIN_PADRAO;
-        setPerfil(dados);
-        setPerfilForm({ nome: "", email: "", telefone: "", papel: "Liderado", ...dados });
-      } catch {
-        setPerfil(ADMIN_PADRAO);
-        setPerfilForm(ADMIN_PADRAO);
-      }
-      try {
-        const c = await window.storage.get(CATEGORIAS_KEY);
-        setCategoriasCadastradas(c ? JSON.parse(c.value) : CATEGORIAS_PADRAO);
-      } catch {
-        setCategoriasCadastradas(CATEGORIAS_PADRAO);
-      }
-      loadedOnce.current = true;
     })();
   }, []);
-
-  useEffect(() => {
-    if (!loadedOnce.current || livros === null) return;
-    setSaving(true);
-    window.storage.set(STORAGE_KEY, JSON.stringify(livros)).finally(() => setSaving(false));
-  }, [livros]);
-
-  useEffect(() => {
-    if (!loadedOnce.current || movs === null) return;
-    window.storage.set(MOV_KEY, JSON.stringify(movs));
-  }, [movs]);
-
-  useEffect(() => {
-    if (!loadedOnce.current || usuarios === null) return;
-    window.storage.set(USUARIOS_KEY, JSON.stringify(usuarios));
-  }, [usuarios]);
-
-  useEffect(() => {
-    if (!loadedOnce.current || categoriasCadastradas === null) return;
-    window.storage.set(CATEGORIAS_KEY, JSON.stringify(categoriasCadastradas));
-  }, [categoriasCadastradas]);
-
 
   // ---- limpeza da câmera ao desmontar ----
   useEffect(() => {
@@ -298,11 +487,25 @@ export default function Acervo() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Envolve uma chamada ao Supabase com indicador de "salvando" e captura de erro,
+  // pra usar nas funções de cadastro/edição/exclusão sem repetir try/catch toda hora.
+  const sincronizar = async (fn) => {
+    setSaving(true);
+    try {
+      await fn();
+      setSbErro(null);
+    } catch (err) {
+      console.error(err);
+      setSbErro("Não foi possível salvar no banco compartilhado. Verifique sua internet e tente de novo.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const registrarMovimento = (livroId, tipo, detalhe, extra = {}) => {
-    setMovs((prev) => [
-      { id: uid("mv"), livroId, tipo, data: new Date().toISOString(), detalhe: detalhe || "", ...extra },
-      ...prev,
-    ]);
+    const mov = { id: uid("mv"), livroId, tipo, data: new Date().toISOString(), detalhe: detalhe || "", ...extra };
+    setMovs((prev) => [mov, ...prev]);
+    sincronizar(() => sbInsert("movimentacoes", movParaLinha(mov)));
   };
 
   // ---- venda ----
@@ -312,9 +515,7 @@ export default function Acervo() {
     setVTelefone("");
     setVDesconto("");
     setVSugestoesAbertas(false);
-    const eu = perfil && (usuarios || []).find(
-      (u) => u.papel === "Liderado" && u.nome.trim().toLowerCase() === perfil.nome.trim().toLowerCase()
-    );
+    const eu = perfil && (usuarios || []).find((u) => u.id === perfil.id && u.papel === "Liderado");
     setVVendedorId(eu ? eu.id : "");
     setVendaModal(livroId);
   };
@@ -329,12 +530,10 @@ export default function Acervo() {
     const descontoNum = Math.max(0, parseFloat((vDesconto || "0").replace(",", ".")) || 0);
     const subtotal = livro.preco != null ? livro.preco * qtd : null;
     const valorTotal = subtotal != null ? Math.max(0, subtotal - descontoNum) : null;
+    const novaQtd = livro.quantidade - qtd;
 
-    setLivros((prev) =>
-      prev.map((l) =>
-        l.id === vendaModal ? { ...l, quantidade: l.quantidade - qtd, status: statusDe(l.quantidade - qtd) } : l
-      )
-    );
+    setLivros((prev) => prev.map((l) => (l.id === vendaModal ? { ...l, quantidade: novaQtd, status: statusDe(novaQtd) } : l)));
+    sincronizar(() => sbUpdate("livros", vendaModal, { quantidade: novaQtd, status: statusDe(novaQtd) }));
     registrarMovimento(
       vendaModal,
       `venda de ${qtd} ${qtd === 1 ? "exemplar" : "exemplares"}`,
@@ -360,9 +559,10 @@ export default function Acervo() {
   const confirmarRepo = () => {
     if (!repoModal) return;
     const qtd = Math.max(1, parseInt(rQtd, 10) || 1);
-    setLivros((prev) =>
-      prev.map((l) => (l.id === repoModal ? { ...l, quantidade: l.quantidade + qtd, status: statusDe(l.quantidade + qtd) } : l))
-    );
+    const livro = livros.find((l) => l.id === repoModal);
+    const novaQtd = livro.quantidade + qtd;
+    setLivros((prev) => prev.map((l) => (l.id === repoModal ? { ...l, quantidade: novaQtd, status: statusDe(novaQtd) } : l)));
+    sincronizar(() => sbUpdate("livros", repoModal, { quantidade: novaQtd, status: statusDe(novaQtd) }));
     registrarMovimento(repoModal, `reposição de ${qtd} ${qtd === 1 ? "exemplar" : "exemplares"}`, "");
     setRepoModal(null);
   };
@@ -371,11 +571,13 @@ export default function Acervo() {
   const editarQuantidade = (livroId, novaQtd) => {
     const qtd = Math.max(0, parseInt(novaQtd, 10) || 0);
     setLivros((prev) => prev.map((l) => (l.id === livroId ? { ...l, quantidade: qtd, status: statusDe(qtd) } : l)));
+    sincronizar(() => sbUpdate("livros", livroId, { quantidade: qtd, status: statusDe(qtd) }));
   };
 
   const excluirLivro = (livroId) => {
     setLivros((prev) => prev.filter((l) => l.id !== livroId));
     setConfirmExcluir(null);
+    sincronizar(() => sbDelete("livros", livroId));
   };
 
   const abrirEdicaoLivro = (livro) => {
@@ -392,49 +594,50 @@ export default function Acervo() {
   const salvarEdicaoLivro = () => {
     if (!livroEditandoId || !edicaoForm.titulo.trim()) return;
     const precoNum = parseFloat(edicaoForm.preco.replace(",", "."));
-    setLivros((prev) =>
-      prev.map((l) =>
-        l.id === livroEditandoId
-          ? {
-              ...l,
-              titulo: edicaoForm.titulo.trim(),
-              autor: edicaoForm.autor.trim() || "Autor desconhecido",
-              categoria: edicaoForm.categoria || "Sem categoria",
-              isbn: edicaoForm.isbn.trim() || null,
-              preco: !isNaN(precoNum) && precoNum >= 0 ? precoNum : null,
-            }
-          : l
-      )
-    );
+    const campos = {
+      titulo: edicaoForm.titulo.trim(),
+      autor: edicaoForm.autor.trim() || "Autor desconhecido",
+      categoria: edicaoForm.categoria || "Sem categoria",
+      isbn: edicaoForm.isbn.trim() || null,
+      preco: !isNaN(precoNum) && precoNum >= 0 ? precoNum : null,
+    };
+    setLivros((prev) => prev.map((l) => (l.id === livroEditandoId ? { ...l, ...campos } : l)));
+    sincronizar(() => sbUpdate("livros", livroEditandoId, campos));
     setLivroEditandoId(null);
   };
 
   // ---- gestão da equipe ----
   const souLider = !!(perfil && perfil.papel === "Líder");
 
-  const adicionarUsuario = () => {
+  const adicionarUsuario = async () => {
     if (!souLider) return;
-    if (!novoUsuario.nome.trim() || !novoUsuario.email.trim()) return;
-    const usuario = {
-      id: uid("us"),
-      nome: novoUsuario.nome.trim(),
-      email: novoUsuario.email.trim(),
-      telefone: novoUsuario.telefone.trim(),
-      papel: novoUsuario.papel,
-    };
-    setUsuarios((prev) => [usuario, ...(prev || [])]);
-    setNovoUsuario({ nome: "", email: "", telefone: "", papel: "Liderado" });
+    if (!novoUsuario.nome.trim() || !novoUsuario.email.trim() || !novoUsuario.senha || novoUsuario.senha.length < 6) return;
+    await sincronizar(async () => {
+      const resultado = await chamarAdminUsuarios("criar_pessoa", {
+        nome: novoUsuario.nome.trim(),
+        email: novoUsuario.email.trim(),
+        telefone: novoUsuario.telefone.trim(),
+        papel: novoUsuario.papel,
+        senha: novoUsuario.senha,
+      });
+      setUsuarios((prev) => [resultado.usuario, ...(prev || [])]);
+      setNovoUsuario({ nome: "", email: "", telefone: "", papel: "Liderado", senha: "" });
+    });
   };
 
   const editarPapelUsuario = (usuarioId, papel) => {
     if (!souLider) return;
     setUsuarios((prev) => prev.map((u) => (u.id === usuarioId ? { ...u, papel } : u)));
+    sincronizar(() => sbUpdate("usuarios", usuarioId, { papel }));
   };
 
-  const excluirUsuario = (usuarioId) => {
+  const excluirUsuario = async (usuarioId) => {
     if (!souLider) return;
-    setUsuarios((prev) => prev.filter((u) => u.id !== usuarioId));
-    setConfirmExcluirUsuario(null);
+    await sincronizar(async () => {
+      await chamarAdminUsuarios("excluir_pessoa", { usuarioId });
+      setUsuarios((prev) => prev.filter((u) => u.id !== usuarioId));
+      setConfirmExcluirUsuario(null);
+    });
   };
 
   // ---- categorias ----
@@ -444,27 +647,38 @@ export default function Acervo() {
     const jaExiste = (categoriasCadastradas || []).some((c) => c.toLowerCase() === nome.toLowerCase());
     if (jaExiste) return;
     setCategoriasCadastradas((prev) => [...(prev || []), nome]);
+    sincronizar(() => sbInsert("categorias", { id: nome, nome }));
     setNovaCategoria("");
   };
 
   const excluirCategoria = (nome) => {
     setCategoriasCadastradas((prev) => (prev || []).filter((c) => c !== nome));
     setConfirmExcluirCategoria(null);
+    sincronizar(() => sbDelete("categorias", nome));
   };
 
-  // ---- perfil ----
-  const salvarPerfil = () => {
-    if (!perfilForm.nome.trim()) return;
-    const dados = {
-      nome: perfilForm.nome.trim(),
-      email: perfilForm.email.trim(),
-      telefone: perfilForm.telefone.trim(),
-      papel: perfilForm.papel,
-    };
-    setPerfil(dados);
-    window.storage.set(PERFIL_KEY, JSON.stringify(dados));
-    setPerfilSalvo(true);
-    setTimeout(() => setPerfilSalvo(false), 2000);
+  // ---- perfil / senha ----
+  const trocarMinhaSenha = async () => {
+    if (!novaSenhaPropria || novaSenhaPropria.length < 6) return;
+    await sincronizar(async () => {
+      await authAlterarMinhaSenha(novaSenhaPropria);
+      setNovaSenhaPropria("");
+      setSenhaAlterada(true);
+      setTimeout(() => setSenhaAlterada(false), 2500);
+    });
+  };
+
+  const abrirRedefinirSenha = (usuarioId) => {
+    setRedefinirSenhaValor("");
+    setRedefinirSenhaId(usuarioId);
+  };
+
+  const confirmarRedefinirSenha = async () => {
+    if (!redefinirSenhaId || !redefinirSenhaValor || redefinirSenhaValor.length < 6) return;
+    await sincronizar(async () => {
+      await chamarAdminUsuarios("redefinir_senha", { usuarioId: redefinirSenhaId, novaSenha: redefinirSenhaValor });
+      setRedefinirSenhaId(null);
+    });
   };
 
   // ---- cadastro de novo livro ----
@@ -485,6 +699,7 @@ export default function Acervo() {
       preco: !isNaN(precoNum) && precoNum >= 0 ? precoNum : null,
     };
     setLivros((prev) => [livro, ...prev]);
+    sincronizar(() => sbInsert("livros", livro));
     resetNovo();
   };
 
@@ -583,13 +798,19 @@ export default function Acervo() {
       });
 
       setLivros(livrosAtualizados);
+      sincronizar(() => sbUpsert("livros", livrosAtualizados));
 
       if (categoriasNovas.size > 0) {
+        let novasParaSalvar = [];
         setCategoriasCadastradas((prev) => {
           const atuais = new Set((prev || []).map((c) => c.toLowerCase()));
           const novas = Array.from(categoriasNovas).filter((c) => !atuais.has(c.toLowerCase()));
+          novasParaSalvar = novas;
           return [...(prev || []), ...novas];
         });
+        if (novasParaSalvar.length > 0) {
+          sincronizar(() => sbInsert("categorias", novasParaSalvar.map((nome) => ({ id: nome, nome }))));
+        }
       }
 
       setImportResultado({ adicionados, atualizados, ignorados, erro: null });
@@ -991,7 +1212,29 @@ export default function Acervo() {
       icon: <Users size={18} />,
       sub: `${(usuarios || []).length} ${(usuarios || []).length === 1 ? "pessoa" : "pessoas"}`,
     },
+    { separador: true },
+    {
+      key: "perfil",
+      label: "Meu perfil",
+      icon: <UserCircle2 size={18} />,
+      sub: perfil ? `${perfil.nome} · ${perfil.papel}` : "",
+    },
   ];
+
+  const sbErroBanner = sbErro && (
+    <div className="fixed top-0 inset-x-0 z-50 flex justify-center px-4 pt-3 pointer-events-none">
+      <div
+        style={{ background: "#B04A4A", color: "#fff", fontFamily: MONO, fontSize: 12 }}
+        className="pointer-events-auto rounded-sm px-4 py-2.5 shadow-md flex items-center gap-3 max-w-lg"
+      >
+        <CircleAlert size={16} className="shrink-0" />
+        <span className="flex-1">{sbErro}</span>
+        <button onClick={() => setSbErro(null)} aria-label="Fechar aviso" className="shrink-0">
+          <X size={14} />
+        </button>
+      </div>
+    </div>
+  );
 
   const menuLateral = menuAberto && (
     <div className="fixed inset-0 z-50 flex">
@@ -1338,6 +1581,75 @@ export default function Acervo() {
       </div>
     </div>
   );
+
+  if (autenticando) {
+    return (
+      <div style={{ background: PAPER, minHeight: "100vh" }} className="flex items-center justify-center">
+        <Loader2 className="animate-spin" size={28} style={{ color: INK }} />
+      </div>
+    );
+  }
+
+  if (!sessao) {
+    return (
+      <div style={{ background: PAPER, minHeight: "100vh", color: INK, fontFamily: SANS }} className="flex items-center justify-center px-5">
+        <style>{fontesCSS}</style>
+        <div className="w-full max-w-sm">
+          <div className="flex justify-center mb-6">
+            <img src={LOGO_URL} alt="Verbo Shop" style={{ height: 48 }} />
+          </div>
+          <div style={{ background: CARD, borderColor: RULE }} className="border rounded-md p-6">
+            <h1 style={{ fontFamily: SERIF, fontWeight: 600, fontSize: 22 }} className="mb-1">Entrar</h1>
+            <p style={{ color: INK_SOFT, fontSize: 13 }} className="mb-5">Use o e-mail e senha da sua conta da equipe.</p>
+
+            <label style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>E-mail</label>
+            <input
+              type="email"
+              autoFocus
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && fazerLogin()}
+              style={{ fontFamily: SANS, borderColor: RULE, background: PAPER }}
+              className="border rounded-sm px-3 py-2 text-sm w-full mt-1 mb-3"
+            />
+
+            <label style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>Senha</label>
+            <input
+              type="password"
+              value={loginSenha}
+              onChange={(e) => setLoginSenha(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && fazerLogin()}
+              style={{ fontFamily: SANS, borderColor: RULE, background: PAPER }}
+              className="border rounded-sm px-3 py-2 text-sm w-full mt-1 mb-4"
+            />
+
+            {loginErro && (
+              <p style={{ fontFamily: MONO, fontSize: 12, color: "#B04A4A" }} className="mb-3">{loginErro}</p>
+            )}
+
+            <button
+              onClick={fazerLogin}
+              disabled={loginCarregando || !loginEmail.trim() || !loginSenha}
+              style={{
+                background: ACCENT,
+                color: "#fff",
+                fontFamily: MONO,
+                fontSize: 13,
+                opacity: loginCarregando || !loginEmail.trim() || !loginSenha ? 0.5 : 1,
+              }}
+              className="rounded-sm px-3 py-2.5 w-full flex items-center justify-center gap-2 hover:opacity-90 transition"
+            >
+              {loginCarregando && <Loader2 size={14} className="animate-spin" />}
+              {loginCarregando ? "Entrando…" : "Entrar"}
+            </button>
+          </div>
+          <p style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }} className="text-center mt-4">
+            Não tem uma conta? Peça pro Líder da equipe te cadastrar.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (livros === null) {
     return (
@@ -1854,6 +2166,7 @@ export default function Acervo() {
         {scannerOverlay}
         {menuLateral}
         {botaoVoltarAcervo}
+        {sbErroBanner}
       </div>
     );
   }
@@ -1951,6 +2264,7 @@ export default function Acervo() {
         </main>
         {menuLateral}
         {botaoVoltarAcervo}
+        {sbErroBanner}
 
         {/* Detalhe completo de um comprador */}
         {compradorSelecionado && (
@@ -2161,6 +2475,7 @@ export default function Acervo() {
         </main>
         {menuLateral}
         {botaoVoltarAcervo}
+        {sbErroBanner}
 
         {/* Detalhe de uma venda */}
         {vendaSelecionada && (
@@ -2325,6 +2640,7 @@ export default function Acervo() {
         </main>
         {menuLateral}
         {botaoVoltarAcervo}
+        {sbErroBanner}
       </div>
     );
   }
@@ -2423,6 +2739,15 @@ export default function Acervo() {
                       <option key={p} value={p}>{p}</option>
                     ))}
                   </select>
+                  {souLider && (
+                    <button
+                      onClick={() => abrirRedefinirSenha(u.id)}
+                      style={{ borderColor: RULE, color: INK_SOFT, fontFamily: MONO, fontSize: 11 }}
+                      className="border rounded-full px-2.5 py-1.5 shrink-0 hover:opacity-80 transition"
+                    >
+                      Redefinir senha
+                    </button>
+                  )}
                   {souLider &&
                     (confirmExcluirUsuario === u.id ? (
                       <div className="flex gap-1 shrink-0">
@@ -2462,14 +2787,8 @@ export default function Acervo() {
                 <div style={{ background: CARD, borderColor: RULE }} className="border rounded-sm p-4">
                   <p style={{ fontFamily: SANS, fontSize: 13.5, color: INK_SOFT }}>
                     Só quem tem o papel <strong style={{ color: INK }}>Líder</strong> pode cadastrar novas pessoas na
-                    equipe. Se esse é o seu caso, atualize seu papel em{" "}
-                    <button
-                      onClick={() => setPagina("perfil")}
-                      style={{ color: ACCENT, fontFamily: MONO, textDecoration: "underline" }}
-                    >
-                      Gestão do perfil
-                    </button>
-                    .
+                    equipe. Se você acha que deveria ser Líder, peça pra alguém que já é te promover aqui mesmo,
+                    na lista da equipe.
                   </p>
                 </div>
               ) : (
@@ -2486,7 +2805,6 @@ export default function Acervo() {
                     placeholder="E-mail *"
                     value={novoUsuario.email}
                     onChange={(e) => setNovoUsuario({ ...novoUsuario, email: e.target.value })}
-                    onKeyDown={(e) => e.key === "Enter" && adicionarUsuario()}
                     style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
                     className="border rounded-sm px-3 py-2 text-sm"
                   />
@@ -2508,15 +2826,35 @@ export default function Acervo() {
                       <option key={p} value={p}>{p}</option>
                     ))}
                   </select>
+                  <input
+                    type="password"
+                    placeholder="Senha inicial * (mín. 6 caracteres)"
+                    value={novoUsuario.senha}
+                    onChange={(e) => setNovoUsuario({ ...novoUsuario, senha: e.target.value })}
+                    onKeyDown={(e) => e.key === "Enter" && adicionarUsuario()}
+                    style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
+                    className="border rounded-sm px-3 py-2 text-sm"
+                  />
+                  <p style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>
+                    Combine essa senha com a pessoa — ela pode trocar depois em "Meu perfil".
+                  </p>
                   <button
                     onClick={adicionarUsuario}
-                    disabled={!novoUsuario.nome.trim() || !novoUsuario.email.trim()}
+                    disabled={
+                      !novoUsuario.nome.trim() ||
+                      !novoUsuario.email.trim() ||
+                      !novoUsuario.senha ||
+                      novoUsuario.senha.length < 6
+                    }
                     style={{
                       background: ACCENT,
                       color: "#fff",
                       fontFamily: MONO,
                       fontSize: 13,
-                      opacity: !novoUsuario.nome.trim() || !novoUsuario.email.trim() ? 0.4 : 1,
+                      opacity:
+                        !novoUsuario.nome.trim() || !novoUsuario.email.trim() || !novoUsuario.senha || novoUsuario.senha.length < 6
+                          ? 0.4
+                          : 1,
                     }}
                     className="rounded-sm px-3 py-2.5 hover:opacity-90 transition flex items-center justify-center gap-2"
                   >
@@ -2528,8 +2866,50 @@ export default function Acervo() {
             </div>
           )}
         </main>
+
+        {/* Modal de redefinir senha (Líder redefinindo a senha de outra pessoa) */}
+        {redefinirSenhaId && (
+          <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-5 z-20">
+            <div style={{ background: CARD, borderColor: RULE }} className="border rounded-md p-5 w-full max-w-sm">
+              <h3 style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 600 }} className="mb-1">Redefinir senha</h3>
+              <p style={{ color: INK_SOFT, fontSize: 13 }} className="mb-3">
+                {(usuarios || []).find((u) => u.id === redefinirSenhaId)?.nome}
+              </p>
+              <input
+                type="password"
+                placeholder="Nova senha (mín. 6 caracteres)"
+                value={redefinirSenhaValor}
+                onChange={(e) => setRedefinirSenhaValor(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && confirmarRedefinirSenha()}
+                style={{ borderColor: RULE, background: PAPER, fontFamily: SANS }}
+                className="border rounded-sm px-3 py-2 text-sm w-full mb-4"
+              />
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setRedefinirSenhaId(null)} style={{ fontFamily: MONO, fontSize: 12.5, color: INK_SOFT }} className="px-3 py-2">
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmarRedefinirSenha}
+                  disabled={!redefinirSenhaValor || redefinirSenhaValor.length < 6}
+                  style={{
+                    background: ACCENT,
+                    color: "#fff",
+                    fontFamily: MONO,
+                    fontSize: 12.5,
+                    opacity: !redefinirSenhaValor || redefinirSenhaValor.length < 6 ? 0.4 : 1,
+                  }}
+                  className="rounded-sm px-3 py-2"
+                >
+                  Confirmar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {menuLateral}
         {botaoVoltarAcervo}
+        {sbErroBanner}
       </div>
     );
   }
@@ -2543,74 +2923,71 @@ export default function Acervo() {
           <TopBar />
 
           <h1 style={{ fontFamily: SERIF, fontWeight: 600, fontSize: "clamp(24px, 7vw, 32px)", lineHeight: 1.1, marginTop: 6 }}>
-            Gestão do perfil
+            Meu perfil
           </h1>
-          <p style={{ color: INK_SOFT, fontSize: 14, marginTop: 4 }}>Seus dados como pessoa da loja.</p>
+          <p style={{ color: INK_SOFT, fontSize: 14, marginTop: 4 }}>Seus dados como pessoa da equipe.</p>
         </header>
 
         <main className="px-5 pb-16 max-w-5xl mx-auto">
-          <div className="flex flex-col gap-3 max-w-md">
-            <div>
-              <label style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>Nome *</label>
-              <input
-                value={perfilForm.nome}
-                onChange={(e) => setPerfilForm({ ...perfilForm, nome: e.target.value })}
-                style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
-                className="border rounded-sm px-3 py-2 text-sm w-full mt-1"
-              />
-            </div>
-            <div>
-              <label style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>E-mail</label>
-              <input
-                type="email"
-                value={perfilForm.email}
-                onChange={(e) => setPerfilForm({ ...perfilForm, email: e.target.value })}
-                style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
-                className="border rounded-sm px-3 py-2 text-sm w-full mt-1"
-              />
-            </div>
-            <div>
-              <label style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>Telefone</label>
-              <input
-                type="tel"
-                value={perfilForm.telefone}
-                onChange={(e) => setPerfilForm({ ...perfilForm, telefone: maskTelefone(e.target.value) })}
-                onKeyDown={(e) => e.key === "Enter" && salvarPerfil()}
-                style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
-                className="border rounded-sm px-3 py-2 text-sm w-full mt-1"
-              />
-            </div>
-            <div>
-              <label style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>Papel</label>
-              <select
-                value={perfilForm.papel}
-                onChange={(e) => setPerfilForm({ ...perfilForm, papel: e.target.value })}
-                style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
-                className="border rounded-sm px-3 py-2 text-sm w-full mt-1"
-              >
-                {PAPEIS.map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
-            </div>
+          <div style={{ background: CARD, borderColor: RULE }} className="border rounded-sm p-4 max-w-md mb-5">
+            <p style={{ fontFamily: SERIF, fontWeight: 600, fontSize: 17 }}>{perfil?.nome}</p>
+            <p style={{ color: INK_SOFT, fontSize: 13, marginTop: 2 }}>{perfil?.email}</p>
+            {perfil?.telefone && <p style={{ color: INK_SOFT, fontSize: 13 }}>{perfil.telefone}</p>}
+            <span
+              style={{ background: `${ACCENT}18`, color: ACCENT, fontFamily: MONO, fontSize: 11 }}
+              className="inline-block rounded-full px-2.5 py-1 mt-2"
+            >
+              {perfil?.papel}
+            </span>
+            <p style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }} className="mt-3">
+              Nome, e-mail e papel são definidos pelo Líder na Gestão da equipe — fale com ele(a) pra corrigir algo.
+            </p>
+          </div>
+
+          <div className="max-w-md">
+            <label style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>Trocar minha senha</label>
+            <input
+              type="password"
+              placeholder="Nova senha (mín. 6 caracteres)"
+              value={novaSenhaPropria}
+              onChange={(e) => setNovaSenhaPropria(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && trocarMinhaSenha()}
+              style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
+              className="border rounded-sm px-3 py-2 text-sm w-full mt-1 mb-3"
+            />
             <button
-              onClick={salvarPerfil}
-              style={{ background: ACCENT, color: "#fff", fontFamily: MONO, fontSize: 13 }}
+              onClick={trocarMinhaSenha}
+              disabled={!novaSenhaPropria || novaSenhaPropria.length < 6}
+              style={{
+                background: ACCENT,
+                color: "#fff",
+                fontFamily: MONO,
+                fontSize: 13,
+                opacity: !novaSenhaPropria || novaSenhaPropria.length < 6 ? 0.4 : 1,
+              }}
               className="rounded-sm px-3 py-2.5 hover:opacity-90 transition"
             >
-              Salvar perfil
+              Trocar senha
             </button>
-            {perfilSalvo && (
-              <p style={{ fontFamily: MONO, fontSize: 12, color: STATUS.disponivel.color }}>Perfil salvo ✓</p>
+            {senhaAlterada && (
+              <p style={{ fontFamily: MONO, fontSize: 12, color: STATUS.disponivel.color }} className="mt-2">
+                Senha alterada ✓
+              </p>
             )}
           </div>
-          <p style={{ color: INK_SOFT, fontSize: 12.5 }} className="max-w-md mt-4">
-            Dica: se o seu nome aqui bater com um nome cadastrado na Gestão da equipe como Liderado, ele já vem
-            pré-selecionado na hora de registrar uma venda.
-          </p>
+
+          <button
+            onClick={encerrarSessao}
+            style={{ fontFamily: MONO, fontSize: 13, color: "#B04A4A", borderColor: "#B04A4A" }}
+            className="border rounded-sm px-4 py-2.5 mt-8 hover:opacity-80 transition flex items-center gap-2"
+          >
+            <ArrowLeft size={15} />
+            Sair da conta
+          </button>
         </main>
         {menuLateral}
         {botaoVoltarAcervo}
+        {sbErroBanner}
       </div>
     );
   }
@@ -2867,6 +3244,7 @@ export default function Acervo() {
       )}
       {menuLateral}
       {botaoVoltarAcervo}
+      {sbErroBanner}
     </div>
   );
 }
