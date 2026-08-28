@@ -291,6 +291,7 @@ export default function Acervo() {
   const [spineSelecionado, setSpineSelecionado] = useState(null); // livroId
   const [saving, setSaving] = useState(false);
   const [sbErro, setSbErro] = useState(null);
+  const [avisoSucesso, setAvisoSucesso] = useState(null);
   const loadedOnce = useRef(false);
 
   // Venda
@@ -632,6 +633,7 @@ export default function Acervo() {
         senha: novoUsuario.senha,
       });
       setUsuarios((prev) => [resultado.usuario, ...(prev || [])]);
+      mostrarSucesso(`"${resultado.usuario.nome}" cadastrado(a) com sucesso!`);
       setNovoUsuario({ nome: "", email: "", telefone: "", papel: "Liderado", senha: "" });
     });
   };
@@ -711,6 +713,7 @@ export default function Acervo() {
     };
     setLivros((prev) => [livro, ...prev]);
     sincronizar(() => sbInsert("livros", livro));
+    mostrarSucesso(`"${livro.titulo}" cadastrado com sucesso!`);
     resetNovo();
   };
 
@@ -825,6 +828,9 @@ export default function Acervo() {
       }
 
       setImportResultado({ adicionados, atualizados, ignorados, erro: null });
+      mostrarSucesso(
+        `Planilha importada com sucesso! ${adicionados} ${adicionados === 1 ? "título novo" : "títulos novos"} · ${atualizados} ${atualizados === 1 ? "atualizado" : "atualizados"}.`
+      );
     } catch (err) {
       console.error("Falha ao importar planilha:", err);
       setImportResultado({ erro: "Não foi possível ler o arquivo. Confira se é um .xlsx, .xls ou .csv válido." });
@@ -1225,10 +1231,11 @@ export default function Acervo() {
     },
     { separador: true },
     {
-      key: "perfil",
-      label: "Meu perfil",
-      icon: <UserCircle2 size={18} />,
+      key: "sair",
+      label: "Sair",
+      icon: <ArrowLeft size={18} />,
       sub: perfil ? `${perfil.nome} · ${perfil.papel}` : "",
+      acao: () => encerrarSessao(),
     },
   ];
 
@@ -1241,6 +1248,26 @@ export default function Acervo() {
         <CircleAlert size={16} className="shrink-0" />
         <span className="flex-1">{sbErro}</span>
         <button onClick={() => setSbErro(null)} aria-label="Fechar aviso" className="shrink-0">
+          <X size={14} />
+        </button>
+      </div>
+    </div>
+  );
+
+  const mostrarSucesso = (msg) => {
+    setAvisoSucesso(msg);
+    setTimeout(() => setAvisoSucesso(null), 3500);
+  };
+
+  const avisoSucessoBanner = avisoSucesso && (
+    <div className="fixed top-0 inset-x-0 z-50 flex justify-center px-4 pt-3 pointer-events-none">
+      <div
+        style={{ background: STATUS.disponivel.color, color: "#fff", fontFamily: MONO, fontSize: 12 }}
+        className="pointer-events-auto rounded-sm px-4 py-2.5 shadow-md flex items-center gap-3 max-w-lg"
+      >
+        <CircleCheck size={16} className="shrink-0" />
+        <span className="flex-1">{avisoSucesso}</span>
+        <button onClick={() => setAvisoSucesso(null)} aria-label="Fechar aviso" className="shrink-0">
           <X size={14} />
         </button>
       </div>
@@ -2189,6 +2216,7 @@ export default function Acervo() {
         {menuLateral}
         {botaoVoltarAcervo}
         {sbErroBanner}
+        {avisoSucessoBanner}
       </div>
     );
   }
@@ -2287,6 +2315,7 @@ export default function Acervo() {
         {menuLateral}
         {botaoVoltarAcervo}
         {sbErroBanner}
+        {avisoSucessoBanner}
 
         {/* Detalhe completo de um comprador */}
         {compradorSelecionado && (
@@ -2498,6 +2527,7 @@ export default function Acervo() {
         {menuLateral}
         {botaoVoltarAcervo}
         {sbErroBanner}
+        {avisoSucessoBanner}
 
         {/* Detalhe de uma venda */}
         {vendaSelecionada && (
@@ -2663,6 +2693,7 @@ export default function Acervo() {
         {menuLateral}
         {botaoVoltarAcervo}
         {sbErroBanner}
+        {avisoSucessoBanner}
       </div>
     );
   }
@@ -2954,6 +2985,7 @@ export default function Acervo() {
         {menuLateral}
         {botaoVoltarAcervo}
         {sbErroBanner}
+        {avisoSucessoBanner}
       </div>
     );
   }
@@ -3043,6 +3075,7 @@ export default function Acervo() {
         {menuLateral}
         {botaoVoltarAcervo}
         {sbErroBanner}
+        {avisoSucessoBanner}
       </div>
     );
   }
@@ -3300,6 +3333,7 @@ export default function Acervo() {
       {menuLateral}
       {botaoVoltarAcervo}
       {sbErroBanner}
+      {avisoSucessoBanner}
     </div>
   );
 }
