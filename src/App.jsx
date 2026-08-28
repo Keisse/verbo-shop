@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import {
   Plus, Search, X, Tag, PackagePlus, Loader2, Phone,
   Settings2, Trash2, ScanBarcode, CircleCheck, CircleAlert, ArrowLeft,
-  Users, UserCircle2, UserPlus, ShoppingBag, Download, Tags, Menu, Receipt, Lightbulb, Pencil, Home, FileSpreadsheet,
+  Users, UserCircle2, UserPlus, ShoppingBag, Download, Tags, Menu, Receipt, Lightbulb, Pencil, Home, FileSpreadsheet, Eye, EyeOff,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -326,6 +326,10 @@ export default function Acervo() {
   const [autenticando, setAutenticando] = useState(true); // true enquanto tenta restaurar sessão salva
   const [loginEmail, setLoginEmail] = useState("");
   const [loginSenha, setLoginSenha] = useState("");
+  const [verLoginSenha, setVerLoginSenha] = useState(false);
+  const [verSenhaPropria, setVerSenhaPropria] = useState(false);
+  const [verSenhaNovoUsuario, setVerSenhaNovoUsuario] = useState(false);
+  const [verSenhaRedefinir, setVerSenhaRedefinir] = useState(false);
   const [loginErro, setLoginErro] = useState("");
   const [loginCarregando, setLoginCarregando] = useState(false);
   const [perfil, setPerfil] = useState(null);
@@ -1621,14 +1625,25 @@ export default function Acervo() {
             />
 
             <label style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>Senha</label>
-            <input
-              type="password"
-              value={loginSenha}
-              onChange={(e) => setLoginSenha(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && fazerLogin()}
-              style={{ fontFamily: SANS, borderColor: RULE, background: PAPER }}
-              className="border rounded-sm px-3 py-2 text-sm w-full mt-1 mb-4"
-            />
+            <div className="relative mt-1 mb-4">
+              <input
+                type={verLoginSenha ? "text" : "password"}
+                value={loginSenha}
+                onChange={(e) => setLoginSenha(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && fazerLogin()}
+                style={{ fontFamily: SANS, borderColor: RULE, background: PAPER }}
+                className="border rounded-sm pl-3 pr-10 py-2 text-sm w-full"
+              />
+              <button
+                type="button"
+                onClick={() => setVerLoginSenha((v) => !v)}
+                style={{ color: INK_SOFT }}
+                className="absolute right-3 top-1/2 -translate-y-1/2"
+                aria-label={verLoginSenha ? "Esconder senha" : "Mostrar senha"}
+              >
+                {verLoginSenha ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
 
             {loginErro && (
               <p style={{ fontFamily: MONO, fontSize: 12, color: "#B04A4A" }} className="mb-3">{loginErro}</p>
@@ -2833,15 +2848,26 @@ export default function Acervo() {
                       <option key={p} value={p}>{p}</option>
                     ))}
                   </select>
-                  <input
-                    type="password"
-                    placeholder="Senha inicial * (mín. 6 caracteres)"
-                    value={novoUsuario.senha}
-                    onChange={(e) => setNovoUsuario({ ...novoUsuario, senha: e.target.value })}
-                    onKeyDown={(e) => e.key === "Enter" && adicionarUsuario()}
-                    style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
-                    className="border rounded-sm px-3 py-2 text-sm"
-                  />
+                  <div className="relative">
+                    <input
+                      type={verSenhaNovoUsuario ? "text" : "password"}
+                      placeholder="Senha inicial * (mín. 6 caracteres)"
+                      value={novoUsuario.senha}
+                      onChange={(e) => setNovoUsuario({ ...novoUsuario, senha: e.target.value })}
+                      onKeyDown={(e) => e.key === "Enter" && adicionarUsuario()}
+                      style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
+                      className="border rounded-sm pl-3 pr-10 py-2 text-sm w-full"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setVerSenhaNovoUsuario((v) => !v)}
+                      style={{ color: INK_SOFT }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2"
+                      aria-label={verSenhaNovoUsuario ? "Esconder senha" : "Mostrar senha"}
+                    >
+                      {verSenhaNovoUsuario ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
                   <p style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>
                     Combine essa senha com a pessoa — ela pode trocar depois em "Meu perfil".
                   </p>
@@ -2882,15 +2908,26 @@ export default function Acervo() {
               <p style={{ color: INK_SOFT, fontSize: 13 }} className="mb-3">
                 {(usuarios || []).find((u) => u.id === redefinirSenhaId)?.nome}
               </p>
-              <input
-                type="password"
-                placeholder="Nova senha (mín. 6 caracteres)"
-                value={redefinirSenhaValor}
-                onChange={(e) => setRedefinirSenhaValor(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && confirmarRedefinirSenha()}
-                style={{ borderColor: RULE, background: PAPER, fontFamily: SANS }}
-                className="border rounded-sm px-3 py-2 text-sm w-full mb-4"
-              />
+              <div className="relative mb-4">
+                <input
+                  type={verSenhaRedefinir ? "text" : "password"}
+                  placeholder="Nova senha (mín. 6 caracteres)"
+                  value={redefinirSenhaValor}
+                  onChange={(e) => setRedefinirSenhaValor(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && confirmarRedefinirSenha()}
+                  style={{ borderColor: RULE, background: PAPER, fontFamily: SANS }}
+                  className="border rounded-sm pl-3 pr-10 py-2 text-sm w-full"
+                />
+                <button
+                  type="button"
+                  onClick={() => setVerSenhaRedefinir((v) => !v)}
+                  style={{ color: INK_SOFT }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2"
+                  aria-label={verSenhaRedefinir ? "Esconder senha" : "Mostrar senha"}
+                >
+                  {verSenhaRedefinir ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
               <div className="flex gap-2 justify-end">
                 <button onClick={() => setRedefinirSenhaId(null)} style={{ fontFamily: MONO, fontSize: 12.5, color: INK_SOFT }} className="px-3 py-2">
                   Cancelar
@@ -2953,15 +2990,26 @@ export default function Acervo() {
 
           <div className="max-w-md">
             <label style={{ fontFamily: MONO, fontSize: 11, color: INK_SOFT }}>Trocar minha senha</label>
-            <input
-              type="password"
-              placeholder="Nova senha (mín. 6 caracteres)"
-              value={novaSenhaPropria}
-              onChange={(e) => setNovaSenhaPropria(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && trocarMinhaSenha()}
-              style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
-              className="border rounded-sm px-3 py-2 text-sm w-full mt-1 mb-3"
-            />
+            <div className="relative mt-1 mb-3">
+              <input
+                type={verSenhaPropria ? "text" : "password"}
+                placeholder="Nova senha (mín. 6 caracteres)"
+                value={novaSenhaPropria}
+                onChange={(e) => setNovaSenhaPropria(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && trocarMinhaSenha()}
+                style={{ fontFamily: SANS, borderColor: RULE, background: CARD }}
+                className="border rounded-sm pl-3 pr-10 py-2 text-sm w-full"
+              />
+              <button
+                type="button"
+                onClick={() => setVerSenhaPropria((v) => !v)}
+                style={{ color: INK_SOFT }}
+                className="absolute right-3 top-1/2 -translate-y-1/2"
+                aria-label={verSenhaPropria ? "Esconder senha" : "Mostrar senha"}
+              >
+                {verSenhaPropria ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
             <button
               onClick={trocarMinhaSenha}
               disabled={!novaSenhaPropria || novaSenhaPropria.length < 6}
