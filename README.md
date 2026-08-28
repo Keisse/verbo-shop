@@ -31,6 +31,19 @@ npm run dev
 Abre em `http://localhost:5173`. Como é `localhost`, a câmera funciona
 mesmo sem HTTPS.
 
+## Domínio próprio
+
+O site está configurado pra rodar em `verboshop.verbomontesclaros.com`
+(arquivo `public/CNAME` + `base: "/"` no `vite.config.js`). Os passos de
+DNS e GitHub Pages estão descritos na conversa com o Claude — resumindo:
+
+1. No provedor de DNS do domínio, crie um registro CNAME: host `verboshop`
+   apontando para `SEU-USUARIO.github.io.`
+2. No GitHub → Settings → Pages → Custom domain, digite
+   `verboshop.verbomontesclaros.com` e salve.
+3. Publique normalmente (`npm run deploy`) — o arquivo `public/CNAME`
+   garante que o domínio não se perde a cada publicação.
+
 ## Publicar (pra testar em qualquer celular)
 
 ### Opção A — GitHub Pages (recomendado se você já usa GitHub)

@@ -308,6 +308,8 @@ export default function Acervo() {
   const [equipeAba, setEquipeAba] = useState("equipe"); // equipe | cadastrar
   const [equipeBusca, setEquipeBusca] = useState("");
   const [compradoresBusca, setCompradoresBusca] = useState("");
+  const [compradoresDataInicio, setCompradoresDataInicio] = useState("");
+  const [compradoresDataFim, setCompradoresDataFim] = useState("");
   const [compradorSelecionado, setCompradorSelecionado] = useState(null);
   const [vendasBusca, setVendasBusca] = useState("");
   const [vendaSelecionada, setVendaSelecionada] = useState(null);
@@ -1010,6 +1012,7 @@ export default function Acervo() {
       titulos: l.length,
       exemplares: l.reduce((acc, x) => acc + x.quantidade, 0),
       disponiveis: l.filter((x) => x.status === "disponivel").length,
+      esgotando: l.filter((x) => estoqueBaixo(x)).length,
       esgotados: l.filter((x) => x.status === "esgotado").length,
     };
   }, [livros]);
@@ -1037,7 +1040,11 @@ export default function Acervo() {
   const catalogoGestaoFiltrado = useMemo(() => {
     const q = gestaoBusca.trim().toLowerCase();
     return (livros || [])
-      .filter((l) => (gestaoFiltroStatus === "todos" ? true : l.status === gestaoFiltroStatus))
+      .filter((l) => {
+        if (gestaoFiltroStatus === "todos") return true;
+        if (gestaoFiltroStatus === "esgotando") return estoqueBaixo(l);
+        return l.status === gestaoFiltroStatus;
+      })
       .filter((l) => (gestaoFiltroCategoria === "todas" ? true : l.categoria === gestaoFiltroCategoria))
       .filter((l) => (!q ? true : l.titulo.toLowerCase().includes(q) || l.autor.toLowerCase().includes(q)));
   }, [livros, gestaoBusca, gestaoFiltroStatus, gestaoFiltroCategoria]);
@@ -1050,9 +1057,9 @@ export default function Acervo() {
     return (usuarios || []).filter((u) => u.nome.toLowerCase().includes(q));
   }, [usuarios, equipeBusca]);
 
-  const compradores = useMemo(() => {
+  const agregarCompradores = (listaMovs) => {
     const mapa = new Map();
-    (movs || []).forEach((m) => {
+    (listaMovs || []).forEach((m) => {
       if (!m.tipo || !m.tipo.startsWith("venda")) return;
       const c = compradorDaMovimentacao(m);
       if (!c || !c.nome) return;
@@ -1076,7 +1083,26 @@ export default function Acervo() {
       registro.itens.push({ titulo: livro ? livro.titulo : "Livro removido", quantidade: qtd, data: m.data });
     });
     return Array.from(mapa.values()).sort((a, b) => new Date(b.ultimaCompra) - new Date(a.ultimaCompra));
-  }, [movs, livros]);
+  };
+
+  const compradores = useMemo(() => agregarCompradores(movs), [movs, livros]);
+
+  const compradoresPeriodo = useMemo(() => {
+    const inicio = compradoresDataInicio ? new Date(compradoresDataInicio + "T00:00:00") : null;
+    const fim = compradoresDataFim ? new Date(compradoresDataFim + "T23:59:59") : null;
+    if (!inicio && !fim) return movs || [];
+    return (movs || []).filter((m) => {
+      const data = new Date(m.data);
+      if (inicio && data < inicio) return false;
+      if (fim && data > fim) return false;
+      return true;
+    });
+  }, [movs, compradoresDataInicio, compradoresDataFim]);
+
+  const compradoresAgregadosPeriodo = useMemo(
+    () => agregarCompradores(compradoresPeriodo),
+    [compradoresPeriodo, livros]
+  );
 
   const sugestoesComprador = useMemo(() => {
     const q = vNome.trim().toLowerCase();
@@ -1141,11 +1167,11 @@ export default function Acervo() {
     );
   }, [vendasFiltradas]);
 
-  const compradoresFiltrados = useMemo(() => {
+  const compradoresFiltradosPeriodo = useMemo(() => {
     const q = compradoresBusca.trim().toLowerCase();
-    if (!q) return compradores;
-    return compradores.filter((c) => c.nome.toLowerCase().includes(q) || c.telefone.includes(q));
-  }, [compradores, compradoresBusca]);
+    if (!q) return compradoresAgregadosPeriodo;
+    return compradoresAgregadosPeriodo.filter((c) => c.nome.toLowerCase().includes(q) || c.telefone.includes(q));
+  }, [compradoresAgregadosPeriodo, compradoresBusca]);
 
   const contagemPorCategoria = useMemo(() => {
     const mapa = {};
@@ -1155,8 +1181,43 @@ export default function Acervo() {
     return mapa;
   }, [livros]);
 
+  const exportarCatalogoExcel = () => {
+    const linhas = catalogoGestaoFiltrado.map((l) => ({
+      Título: l.titulo,
+      Autor: l.autor,
+      Categoria: l.categoria,
+      ISBN: l.isbn || "",
+      Quantidade: l.quantidade,
+      "Preço": l.preco != null ? l.preco : "",
+      Status: STATUS[l.status]?.label || l.status,
+    }));
+    const planilha = XLSX.utils.json_to_sheet(linhas);
+    planilha["!cols"] = [{ wch: 32 }, { wch: 22 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
+    const livro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(livro, planilha, "Estoque");
+    XLSX.writeFile(livro, "estoque-verbo-shop.xlsx");
+  };
+
+  const exportarVendasExcel = () => {
+    const linhas = vendasFiltradas.map((v) => ({
+      Livro: v.livroTitulo,
+      Comprador: v.compradorNome,
+      Telefone: v.compradorTelefone,
+      Quantidade: v.quantidade,
+      "Vendido por": v.vendedorNome,
+      Desconto: v.desconto || "",
+      Total: v.valorTotal != null ? v.valorTotal : "",
+      Data: formatDate(v.data),
+    }));
+    const planilha = XLSX.utils.json_to_sheet(linhas);
+    planilha["!cols"] = [{ wch: 30 }, { wch: 24 }, { wch: 16 }, { wch: 12 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 14 }];
+    const livro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(livro, planilha, "Vendas");
+    XLSX.writeFile(livro, "vendas-verbo-shop.xlsx");
+  };
+
   const exportarCompradoresExcel = () => {
-    const linhas = compradores.map((c) => ({
+    const linhas = compradoresFiltradosPeriodo.map((c) => ({
       Nome: c.nome,
       Telefone: c.telefone,
       "Total de compras": c.compras,
@@ -1750,6 +1811,22 @@ export default function Acervo() {
             ))}
           </div>
 
+          <button
+            onClick={exportarCatalogoExcel}
+            disabled={catalogoGestaoFiltrado.length === 0}
+            style={{
+              background: ACCENT,
+              color: "#fff",
+              fontFamily: MONO,
+              fontSize: 13,
+              opacity: catalogoGestaoFiltrado.length === 0 ? 0.4 : 1,
+            }}
+            className="rounded-sm px-4 py-2.5 mt-4 flex items-center justify-center gap-2 hover:opacity-90 transition w-full sm:w-auto"
+          >
+            <Download size={16} />
+            Exportar planilha de resultados
+          </button>
+
           {/* Filtros — só fazem sentido no catálogo */}
           {gestaoAba === "catalogo" && (
             <>
@@ -1757,6 +1834,7 @@ export default function Acervo() {
                 {[
                   { key: "todos", label: "Todos", n: totais.titulos, color: INK },
                   { key: "disponivel", label: STATUS.disponivel.label, n: totais.disponiveis, color: STATUS.disponivel.color },
+                  { key: "esgotando", label: "Esgotando", n: totais.esgotando, color: COR_ESTOQUE_BAIXO },
                   { key: "esgotado", label: STATUS.esgotado.label, n: totais.esgotados, color: STATUS.esgotado.color },
                 ].map((s) => (
                   <button
@@ -2233,18 +2311,18 @@ export default function Acervo() {
             Compradores
           </h1>
           <p style={{ color: INK_SOFT, fontSize: 14, marginTop: 4 }}>
-            {compradores.length} {compradores.length === 1 ? "pessoa" : "pessoas"} · a partir do histórico de vendas
+            {compradoresFiltradosPeriodo.length} {compradoresFiltradosPeriodo.length === 1 ? "pessoa" : "pessoas"} no período · a partir do histórico de vendas
           </p>
 
           <button
             onClick={exportarCompradoresExcel}
-            disabled={compradores.length === 0}
+            disabled={compradoresFiltradosPeriodo.length === 0}
             style={{
               background: ACCENT,
               color: "#fff",
               fontFamily: MONO,
               fontSize: 13,
-              opacity: compradores.length === 0 ? 0.4 : 1,
+              opacity: compradoresFiltradosPeriodo.length === 0 ? 0.4 : 1,
             }}
             className="rounded-sm px-4 py-2.5 mt-5 flex items-center justify-center gap-2 hover:opacity-90 transition w-full sm:w-auto"
           >
@@ -2253,7 +2331,44 @@ export default function Acervo() {
           </button>
 
           {compradores.length > 0 && (
-            <div className="flex items-center gap-2 mt-5 border-b pb-3" style={{ borderColor: RULE }}>
+            <div className="flex flex-wrap gap-3 mt-5">
+              <div>
+                <label style={{ fontFamily: MONO, fontSize: 10.5, color: INK_SOFT, letterSpacing: "0.06em" }}>DE</label>
+                <input
+                  type="date"
+                  value={compradoresDataInicio}
+                  onChange={(e) => setCompradoresDataInicio(e.target.value)}
+                  style={{ fontFamily: MONO, fontSize: 12.5, borderColor: RULE, background: CARD, color: INK }}
+                  className="border rounded-sm px-2 py-1.5 block mt-1"
+                />
+              </div>
+              <div>
+                <label style={{ fontFamily: MONO, fontSize: 10.5, color: INK_SOFT, letterSpacing: "0.06em" }}>ATÉ</label>
+                <input
+                  type="date"
+                  value={compradoresDataFim}
+                  onChange={(e) => setCompradoresDataFim(e.target.value)}
+                  style={{ fontFamily: MONO, fontSize: 12.5, borderColor: RULE, background: CARD, color: INK }}
+                  className="border rounded-sm px-2 py-1.5 block mt-1"
+                />
+              </div>
+              {(compradoresDataInicio || compradoresDataFim) && (
+                <button
+                  onClick={() => {
+                    setCompradoresDataInicio("");
+                    setCompradoresDataFim("");
+                  }}
+                  style={{ fontFamily: MONO, fontSize: 11.5, color: INK_SOFT }}
+                  className="self-end pb-2 hover:opacity-70 transition"
+                >
+                  Limpar datas
+                </button>
+              )}
+            </div>
+          )}
+
+          {compradores.length > 0 && (
+            <div className="flex items-center gap-2 mt-4 border-b pb-3" style={{ borderColor: RULE }}>
               <Search size={16} style={{ color: INK_SOFT }} />
               <input
                 placeholder="Buscar por nome ou telefone…"
@@ -2271,13 +2386,13 @@ export default function Acervo() {
             <p style={{ color: INK_SOFT, fontSize: 13 }} className="py-6 text-center">
               Nenhuma venda registrada ainda. Assim que a primeira venda for feita, o comprador aparece aqui.
             </p>
-          ) : compradoresFiltrados.length === 0 ? (
+          ) : compradoresFiltradosPeriodo.length === 0 ? (
             <p style={{ color: INK_SOFT, fontSize: 13 }} className="py-6 text-center">
               Nenhuma pessoa encontrada.
             </p>
           ) : (
             <div className="grid sm:grid-cols-2 gap-4">
-              {compradoresFiltrados.map((c) => (
+              {compradoresFiltradosPeriodo.map((c) => (
                 <button
                   key={`${c.nome}|${c.telefone}`}
                   onClick={() => setCompradorSelecionado(c)}
@@ -2383,6 +2498,24 @@ export default function Acervo() {
             {vendasRegistradas.length} {vendasRegistradas.length === 1 ? "venda registrada" : "vendas registradas"} ·{" "}
             {totalExemplaresVendidos} {totalExemplaresVendidos === 1 ? "exemplar vendido" : "exemplares vendidos"}
           </p>
+
+          {vendasRegistradas.length > 0 && (
+            <button
+              onClick={exportarVendasExcel}
+              disabled={vendasFiltradas.length === 0}
+              style={{
+                background: ACCENT,
+                color: "#fff",
+                fontFamily: MONO,
+                fontSize: 13,
+                opacity: vendasFiltradas.length === 0 ? 0.4 : 1,
+              }}
+              className="rounded-sm px-4 py-2.5 mt-5 flex items-center justify-center gap-2 hover:opacity-90 transition w-full sm:w-auto"
+            >
+              <Download size={16} />
+              Exportar para Excel
+            </button>
+          )}
 
           {vendasRegistradas.length > 0 && (
             <>
@@ -3292,7 +3425,7 @@ export default function Acervo() {
                         className="rounded-full px-2 py-0.5 flex items-center gap-1"
                       >
                         <span className="w-1 h-1 rounded-full shrink-0" style={{ background: COR_ESTOQUE_BAIXO }} />
-                        ACABANDO
+                        ESGOTANDO
                       </span>
                     )}
                   </div>
@@ -3493,7 +3626,7 @@ function FichaLivro({ livro, onVender, onRepor }) {
             className="rounded-full px-2 py-0.5 flex items-center gap-1"
           >
             <span className="w-1 h-1 rounded-full shrink-0" style={{ background: COR_ESTOQUE_BAIXO }} />
-            ACABANDO
+            ESGOTANDO
           </span>
         )}
       </div>
